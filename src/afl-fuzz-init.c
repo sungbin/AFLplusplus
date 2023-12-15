@@ -28,6 +28,7 @@
 #include <limits.h>
 #include <string.h>
 #include "cmplog.h"
+#include "logguide.h"
 
 #ifdef HAVE_AFFINITY
 

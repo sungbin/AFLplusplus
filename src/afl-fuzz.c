@@ -25,6 +25,7 @@
 
 #include "afl-fuzz.h"
 #include "cmplog.h"
+#include "logguide.h"
 #include "common.h"
 #include <limits.h>
 #include <stdlib.h>
@@ -48,7 +49,7 @@ extern u64 time_spent_working;
 static void at_exit() {
 
   s32   i, pid1 = 0, pid2 = 0, pgrp = -1;
-  char *list[4] = {SHM_ENV_VAR, SHM_FUZZ_ENV_VAR, CMPLOG_SHM_ENV_VAR, NULL};
+  char *list[4] = {SHM_ENV_VAR, SHM_FUZZ_ENV_VAR, CMPLOG_SHM_ENV_VAR, LOGGUIDE_SHM_ENV_VAR, NULL};
   char *ptr;
 
   ptr = getenv("__AFL_TARGET_PID2");
@@ -224,6 +225,7 @@ static void usage(u8 *argv0, int more_help) {
       "(0-...)\n"
       "  -e ext        - file extension for the fuzz test input file (if "
       "needed)\n"
+      "  -u            - log-guided mode\n"
       "\n",
       argv0, STRATEGY_SWITCH_TIME, EXEC_TIMEOUT, MEM_LIMIT, MAX_FILE,
       FOREIGN_SYNCS_MAX);
@@ -645,6 +647,14 @@ int main(int argc, char **argv_orig, char **envp) {
           afl->cmplog_binary = ck_strdup(optarg);
 
         }
+
+        break;
+
+      }
+
+      case 'u': {
+
+        afl->shm.logguide_mode = 1;
 
         break;
 

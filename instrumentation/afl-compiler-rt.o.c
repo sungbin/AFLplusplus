@@ -30,6 +30,7 @@
 #include "config.h"
 #include "types.h"
 #include "cmplog.h"
+#include "logguide.h"
 #include "llvm-alternative-coverage.h"
 
 #define XXH_INLINE_ALL
@@ -167,6 +168,8 @@ __thread u32        __afl_prev_ctx;
 
 struct cmp_map *__afl_cmp_map;
 struct cmp_map *__afl_cmp_map_backup;
+
+struct logguide_map *__afl_logguide_map;
 
 /* Child pid? */
 
@@ -722,6 +725,72 @@ static void __afl_map_shm(void) {
 
   }
 
+  id_str = getenv(LOGGUIDE_SHM_ENV_VAR);
+
+  if (__afl_debug) {
+
+    fprintf(stderr, "DEBUG: logguide id_str %s\n",
+            id_str == NULL ? "<null>" : id_str);
+
+  }
+
+  if (id_str) {
+
+    // /dev/null doesn't work so we use /dev/urandom
+    if ((__afl_dummy_fd[1] = open("/dev/urandom", O_WRONLY)) < 0) {
+
+      if (pipe(__afl_dummy_fd) < 0) { __afl_dummy_fd[1] = 1; }
+
+    }
+
+#ifdef USEMMAP
+    const char     *shm_file_path = id_str;
+    int             shm_fd = -1;
+    struct cmp_map *shm_base = NULL;
+
+    /* create the shared memory segment as if it was a file */
+    shm_fd = shm_open(shm_file_path, O_RDWR, DEFAULT_PERMISSION);
+    if (shm_fd == -1) {
+
+      perror("shm_open() failed\n");
+      send_forkserver_error(FS_ERROR_SHM_OPEN);
+      exit(1);
+
+    }
+
+    /* map the shared memory segment to the address space of the process */
+    shm_base = mmap(0, sizeof(struct cmp_map), PROT_READ | PROT_WRITE,
+                    MAP_SHARED, shm_fd, 0);
+    if (shm_base == MAP_FAILED) {
+
+      close(shm_fd);
+      shm_fd = -1;
+
+      fprintf(stderr, "mmap() failed\n");
+      send_forkserver_error(FS_ERROR_SHM_OPEN);
+      exit(2);
+
+    }
+
+    __afl_cmp_map = shm_base;
+#else
+    u32 shm_id = atoi(id_str);
+
+    __afl_cmp_map = (struct cmp_map *)shmat(shm_id, NULL, 0);
+#endif
+
+    __afl_cmp_map_backup = __afl_cmp_map;
+
+    if (!__afl_cmp_map || __afl_cmp_map == (void *)-1) {
+
+      perror("shmat for logguide");
+      send_forkserver_error(FS_ERROR_SHM_OPEN);
+      _exit(1);
+
+    }
+
+  }
+
 #ifdef __AFL_CODE_COVERAGE
   char *pcmap_id_str = getenv("__AFL_PCMAP_SHM_ID");
 
@@ -804,6 +873,25 @@ static void __afl_unmap_shm(void) {
     __afl_cmp_map_backup = NULL;
 
   }
+
+  id_str = getenv(LOGGUIDE_SHM_ENV_VAR);
+
+  if (id_str) {
+
+#ifdef USEMMAP
+
+    munmap((void *)__afl_logguide_map, __afl_map_size);
+
+#else
+
+    shmdt((void *)__afl_logguide_map);
+
+#endif
+
+    __afl_logguide_map = NULL;
+
+  }
+
 
   __afl_already_initialized_shm = 0;
 

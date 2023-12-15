@@ -36,6 +36,7 @@
 #include "hash.h"
 #include "sharedmem.h"
 #include "cmplog.h"
+#include "logguide.h"
 #include "list.h"
 
 #include <stdio.h>
@@ -127,9 +128,38 @@ void afl_shm_deinit(sharedmem_t *shm) {
 
   }
 
+  if (shm->logguide_mode) {
+
+    unsetenv(LOGGUIDE_SHM_ENV_VAR);
+
+    if (shm->logguide_map != NULL) {
+
+      munmap(shm->logguide_map, shm->map_size);
+      shm->logguide_map = NULL;
+
+    }
+
+    if (shm->logguide_g_shm_fd != -1) {
+
+      close(shm->logguide_g_shm_fd);
+      shm->logguide_g_shm_fd = -1;
+
+    }
+
+    if (shm->logguide_g_shm_file_path[0]) {
+
+      shm_unlink(shm->logguide_g_shm_file_path);
+      shm->logguide_g_shm_file_path[0] = 0;
+
+    }
+
+  }
+
 #else
   shmctl(shm->shm_id, IPC_RMID, NULL);
   if (shm->cmplog_mode) { shmctl(shm->cmplog_shm_id, IPC_RMID, NULL); }
+
+  if (shm->logguide_mode) { shmctl(shm->logguide_shm_id, IPC_RMID, NULL); }
 #endif
 
   shm->map = NULL;
@@ -271,6 +301,50 @@ u8 *afl_shm_init(sharedmem_t *shm, size_t map_size,
 
   }
 
+  if (shm->logguide_mode) {
+
+    snprintf(shm->logguide_g_shm_file_path, L_tmpnam, "/afl_logguide_%d_%ld",
+             getpid(), random());
+
+    /* create the shared memory segment as if it was a file */
+    shm->logguide_g_shm_fd =
+        shm_open(shm->logguide_g_shm_file_path, O_CREAT | O_RDWR | O_EXCL,
+                 DEFAULT_PERMISSION);
+    if (shm->logguide_g_shm_fd == -1) { PFATAL("shm_open() failed"); }
+
+    /* configure the size of the shared memory segment */
+    if (ftruncate(shm->logguide_g_shm_fd, map_size)) {
+
+      PFATAL("setup_shm(): logguide ftruncate() failed");
+
+    }
+
+    /* map the shared memory segment to the address space of the process */
+    shm->logguide_map = mmap(0, map_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                        shm->logguide_g_shm_fd, 0);
+    if (shm->cmp_map == MAP_FAILED) {
+
+      close(shm->logguide_g_shm_fd);
+      shm->logguide_g_shm_fd = -1;
+      shm_unlink(shm->logguide_g_shm_file_path);
+      shm->logguide_g_shm_file_path[0] = 0;
+      PFATAL("mmap() failed");
+
+    }
+
+    /* If somebody is asking us to fuzz instrumented binaries in
+       non-instrumented mode, we don't want them to detect instrumentation,
+       since we won't be sending fork server commands. This should be replaced
+       with better auto-detection later on, perhaps? */
+
+    if (!non_instrumented_mode)
+      setenv(LOGGUIDE_SHM_ENV_VAR, shm->logguide_g_shm_file_path, 1);
+
+    if (shm->logguide_map == (void *)-1 || !shm->logguide_map)
+      PFATAL("logguide mmap() failed");
+
+  }
+
 #else
   u8 *shm_str;
 
@@ -291,6 +365,20 @@ u8 *afl_shm_init(sharedmem_t *shm, size_t map_size,
                                 IPC_CREAT | IPC_EXCL | DEFAULT_PERMISSION);
 
     if (shm->cmplog_shm_id < 0) {
+
+      shmctl(shm->shm_id, IPC_RMID, NULL);  // do not leak shmem
+      PFATAL("shmget() failed, try running afl-system-config");
+
+    }
+
+  }
+
+  if (shm->logguide_mode) {
+
+    shm->logguide_shm_id = shmget(IPC_PRIVATE, sizeof(struct logguide_map),
+                                IPC_CREAT | IPC_EXCL | DEFAULT_PERMISSION);
+
+    if (shm->logguide_shm_id < 0) {
 
       shmctl(shm->shm_id, IPC_RMID, NULL);  // do not leak shmem
       PFATAL("shmget() failed, try running afl-system-config");
@@ -323,6 +411,17 @@ u8 *afl_shm_init(sharedmem_t *shm, size_t map_size,
     ck_free(shm_str);
 
   }
+  
+  if (shm->logguide_mode && !non_instrumented_mode) {
+
+    shm_str = alloc_printf("%d", shm->logguide_shm_id);
+
+    setenv(LOGGUIDE_SHM_ENV_VAR, shm_str, 1);
+
+    ck_free(shm_str);
+
+  }
+
 
   shm->map = shmat(shm->shm_id, NULL, 0);
 

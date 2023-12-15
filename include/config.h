@@ -475,6 +475,9 @@
 
 #define CMPLOG_SHM_ENV_VAR "__AFL_CMPLOG_SHM_ID"
 
+/* log-guided */
+#define LOGGUIDE_SHM_ENV_VAR "__AFL_LOGGUIDE_SHM_ID"
+
 /* CPU Affinity lockfile env var */
 
 #define CPU_AFFINITY_ENV_VAR "__AFL_LOCKFILE"
